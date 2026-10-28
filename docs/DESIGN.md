@@ -1,6 +1,6 @@
 # lichess-otb — Technical Design
 
-Status: **draft for review** · Revision 2 (YOLO-based piece detection)
+Status: **draft for review** · Revision 3 (YOLO-based piece detection, public datasets, prior-work evaluation)
 
 ---
 
@@ -81,7 +81,7 @@ The four photos and the 24 s clip (1264×862, about 47 fps) in
 | Folding board: a hinge seam runs across the middle, and the two halves are slightly misaligned. One square on the 2nd rank has chipped veneer that shows white. | Board detection must tolerate one bad square and a small grid misfit. |
 | Hands and forearms cover large parts of the board while moving. There is a bright white table, glare on skin, and auto-exposure drift. | We only analyse the board when it is **stable** (section 5.5). |
 | Light pieces on light squares and dark pieces on dark squares have low contrast. | Hard for hand-written rules, routine for a trained detector, provided the training data contains it. |
-| The user warns that boards, pieces, colours and sizes will vary. | Nothing is hard-coded to one set. Generalization comes from training-data variety (section 7.4). |
+| The user warns that boards, pieces, colours and sizes will vary. | Nothing is hard-coded to one set. Generalization comes from training-data variety (sections 7.3–7.4). |
 
 ---
 
@@ -220,9 +220,17 @@ fitting, run on demand, not every frame:
 6. Validate: at least 16 inliers, reprojection RMS below 0.08 square. Otherwise
    fall back to manual calibration with the best guess pre-filled.
 
-Later option: every dataset-mode frame comes with known corners, so a small
-keypoint model for board corners can be trained from the same data if the
-classical detector turns out too fragile.
+**Corner keypoint model (likely needed).** Classical detection is fragile on
+real boards. chesscog's Hough/RANSAC detector found the right corners on only
+some runs for our sample photos (Appendix A), and it succeeds on only 34% of
+ChessReD's real photos. A small keypoint model (YOLO-pose, 4 corners) can be
+trained from:
+
+- the public corner datasets in section 7.3;
+- every dataset-mode frame, since each one comes with known corners.
+
+For live use a wrong detection is cheap: the user confirms the corners once on
+the overlay, and calibration persists.
 
 ### 5.3 Orientation
 
@@ -474,12 +482,62 @@ The same trick applies to the **chesscog** synthetic dataset (MIT licence,
 about 5,000 rendered images with FEN and corners), which can be converted into
 extra boxes.
 
-### 7.3 How much data
+### 7.3 Public datasets (pre-training)
+
+Surveyed in October 2026 (Hugging Face plus the datasets cited by published
+papers). The only useful ones are **real photos of physical boards** with piece
+or corner labels. Screenshot-style digital boards and 3D renders are left out.
+They are the biggest "chess image" sets on Hugging Face, but they look nothing
+like a webcam frame.
+
+**Pieces:**
+
+| Dataset | Real images | Labels | Licence | Notes |
+|---|---|---|---|---|
+| **ChessReD** ([4TU](https://data.4tu.nl/datasets/99b5c721-280b-450b-b058-b2900b69a90f), [paper](https://arxiv.org/abs/2310.04086)) | 10,800 phone photos, 100 games | FEN for every image. Boxes and corners for 2,078 images (ChessReD2K, 20 games). | **unconfirmed** (4TU unreachable; the paper states none) | The largest real set. One plastic Staunton set on a dark-brown and white vinyl board, on a wooden table, as square phone photos with no hands. Inspected 50 images: mostly diagonal or corner views, and by eye roughly a third look down the files like our camera. The 1024² images (2.5 GB) are on the authors' Google Drive and were downloaded successfully. The labels (`annotations.json`) are only on 4TU. |
+| [dopaul/chess-pieces-merged](https://huggingface.co/datasets/dopaul/chess-pieces-merged) | ~1,056 | YOLO boxes, 12 classes | CC BY 4.0 | Angled shots with players at the table, the closest to our setup. |
+| [LibreYOLO/chess-pieces-mjzgj](https://huggingface.co/datasets/LibreYOLO/chess-pieces-mjzgj) (Roboflow 100) | 289 | YOLO boxes | CC BY 4.0 | Green vinyl board, mostly from above. |
+| [surawut/chess-pieces-dataset-yolo](https://huggingface.co/datasets/surawut/chess-pieces-dataset-yolo) | 3,137 (~1,600 unique, the rest augmented copies) | YOLO boxes plus a `hand` class | CC BY 4.0 | Boards already rectified to a top-down 640² view. |
+
+**Board corners** (for the keypoint model, section 5.2):
+
+| Dataset | Images | Labels | Licence |
+|---|---|---|---|
+| [surawut/chessboard-dataset-yolo](https://huggingface.co/datasets/surawut/chessboard-dataset-yolo) | 3,680 (~1,420 unique) | 4 corner keypoints, many camera angles | CC BY 4.0 |
+| ChessReD2K | 2,078 | corners | as above |
+| [dopaul/chess-board-segmentation](https://huggingface.co/datasets/dopaul/chess-board-segmentation) | 201 | board polygon | CC BY 4.0 |
+
+**Usage rules:**
+
+- Public data is used **for training only**. Validation and test sets come only
+  from our own recordings (section 7.5).
+- Each source gets an importer that maps it to our 12 classes and records its
+  licence and attribution in the model card. CC BY 4.0 requires attribution.
+  Roboflow-derived sets are checked against their original source licence
+  before use.
+- Augmented copies (Roboflow `*.rf.<hash>` names) are grouped by source image,
+  and each group goes into one split only.
+- ChessReD images without boxes still carry a FEN. They can get boxes the same
+  way as dataset mode (section 7.2) once corners are known: from ChessReD2K,
+  or from our corner model.
+
+None of these sets shows our board, our pieces or our camera height. They teach
+the model what real pieces look like. Our own recordings teach it our setup.
+The ChessReD paper shows why both are needed: a model with 98.9% square
+accuracy on its own test set fell to 65% on another setup (CVChess), and
+chesscog got only 2.3% of real ChessReD boards fully right.
+
+### 7.4 How much data
 
 | Stage | Target | Source | Your effort |
 |---|---|---|---|
-| **v1: your board, your set, your camera** | about 500–800 frames, roughly 10–20k boxes | **8–10 recorded games** | About 10 games, plus a PGN for each and a skim of the review grid |
-| v2: other sets and boards | about 2–5k frames | 3–5 more sets at about 200 frames each, chesscog synthetic, permissively licensed public sets | More recordings |
+| **v1: your board, your set, your camera** | public pre-training (section 7.3) plus about 250–400 of your frames | **3–5 recorded games** to start, up to 8–10 if accuracy on the held-out games falls short | 3–5 games, plus a PGN for each and a skim of the review grid |
+| v2: other sets and boards | about 2–5k frames | 3–5 more sets at about 200 frames each, plus the public sets | More recordings |
+
+The 3–5 game figure is an estimate. It assumes pre-training on public data
+pays off as it usually does for fine-tuning, and it is confirmed or revised by
+the first training run, measured with move accuracy on held-out games
+(section 7.5).
 
 Rationale:
 
@@ -492,19 +550,20 @@ Rationale:
 - Consecutive video frames are near-duplicates. Variety matters much more than
   count, which is why we export only 1–3 frames per position.
 
-**What to vary across the 10 games:**
+**What to vary across the games:**
 
-- both camera ends: White near for 5 games, Black near for 5;
+- both camera ends: half with White near, half with Black near;
 - 2–3 lighting conditions (daylight, evening lamp, mixed);
 - small changes in camera height and angle between sessions;
 - real middlegames with captures. At least one game should include castling on
   both sides, and ideally a promotion.
 
-### 7.4 Splits, augmentation and metrics
+### 7.5 Splits, augmentation and metrics
 
 - **Split by recording session, never by frame.** Frames from one game are near
-  copies, so splitting by frame would leak them across sets. Use 7 games for
-  training, 1 for validation and 2 for testing.
+  copies, so splitting by frame would leak them across sets. With 5 games, use
+  3 for training, 1 for validation and 1 for testing. With 10 games, use 7, 1
+  and 2. Public data (section 7.3) only ever goes into training.
 - **Augmentation:**
   - HSV and brightness shifts, blur, noise;
   - small rotation, scale and perspective changes;
@@ -519,7 +578,7 @@ Rationale:
     against ground truth) and **move accuracy** (the PGN the app produces
     against the true PGN).
 
-### 7.5 `training/` layout
+### 7.6 `training/` layout
 
 The training code is run by the user on their GPU machine:
 
@@ -528,7 +587,8 @@ training/
   pyproject.toml           # ultralytics, onnx, onnxruntime, onnxconverter-common
   README.md                # setup + commands
   otb_train/
-    merge.py               # combine dataset-mode zips (+ optional public sets) → YOLO dataset, session-based split
+    sources/               # one importer per public dataset (section 7.3): download, map classes, record licence
+    merge.py               # combine dataset-mode zips + public sets → YOLO dataset, session-based split
     train.py               # fine-tune with fixed seed + config
     evaluate.py            # mAP + square/move accuracy on held-out games
     export.py              # ONNX export, FP16 conversion, model card JSON
@@ -608,7 +668,7 @@ confirmed about 1 s after the hand leaves.
 - **Fixture tests (real pixels):** frames from `test/fixtures/samples/` with
   hand-labelled corners. They check calibration geometry, base-point mapping
   and the stability gate (the sample clip has hands entering and leaving).
-- **Model evaluation:** `training/evaluate.py` on held-out games (section 7.4).
+- **Model evaluation:** `training/evaluate.py` on held-out games (section 7.5).
 - **E2E (Playwright, Chromium):**
   `--use-fake-device-for-media-stream --use-file-for-fake-video-capture=game.y4m`
   runs the real app on a held-out game video. The test asserts that the PGN
@@ -636,7 +696,7 @@ Each step leaves the app runnable and adds tests for what it introduces.
 | 9 | `feat(ui): 2D board, move list, drag-to-move, undo, PGN + lichess export` | A working manual game recorder on top of the camera view. |
 | 10 | `feat(dataset): piece-shape priors, projected boxes, fit-piece-sizes step` | Boxes drawn over your pieces in the sample clip. |
 | 11 | `feat(dataset): video + PGN → stable segments → labelled crops, review grid, zip export` | **Turn your recorded games into a dataset.** |
-| — | *you: record 8–10 games (section 7.3)* | |
+| — | *you: record 3–5 games (section 7.4)* | |
 | 12 | `feat(training): merge, train, evaluate, export ONNX + model card` | Run on your GPU, get `pieces-v1.onnx`. |
 | 13 | `feat(detect): ONNX Runtime Web detector, crop, NMS, square mapping, debug overlay, model caching` | Live boxes and per-square probabilities over the camera view. |
 | 14 | `feat(game): wire detector into move inference` | **First end-to-end:** play moves, get the PGN. |
@@ -664,7 +724,31 @@ Each step leaves the app runnable and adds tests for what it introduces.
 
 ## 14. Open questions
 
-1. **Games for the dataset:** about 10 games from your setup, varied as in
-   section 7.3, each with its PGN. This is needed before step 12.
+1. **Games for the dataset:** 3–5 games from your setup to start, varied as in
+   section 7.4, each with its PGN. This is needed before step 12.
 2. **Piece-size priors:** the defaults assume a standard Staunton set. Step 10
    includes a fitting step, so no measurements are needed from you.
+3. **Model formulation: YOLO boxes or per-square classification
+   (chesscog-style)?**
+   - Per-square classification needs only corners plus a FEN as labels, so it
+     can use all 10,800 ChessReD images, and chesscog's two-photo adaptation
+     applies to it.
+   - YOLO tolerates imprecise corners and runs one pass per frame.
+   - Everything outside the model (sections 4–6, dataset mode) is the same
+     for both. Pending: the two-photo adaptation test (Appendix A).
+4. **ChessReD licence and labels:** to be confirmed from 4TU when it is
+   reachable, before any ChessReD image is used for training.
+
+---
+
+## Appendix A. Prior work evaluated
+
+What we tried or read before settling the design, and what it taught us.
+
+| Work | What it is | Finding | Consequence |
+|---|---|---|---|
+| **ChessCam** ([CameraChessWeb](https://github.com/Pbatch/CameraChessWeb), AGPL-3.0) | Browser app that records OTB games. The current version uses one per-square model with 13 classes, run with LiteRT on WebGPU, and scores legal moves against it. | Fails for our camera position. It is trained for a camera at the side of the board. | Our own model, trained for a camera at a player's end. Its legal-move scoring is the same idea as section 6. |
+| **chesscog** ([repo](https://github.com/georg-wolflein/chesscog), MIT; [paper](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8321354/)) | Photo to FEN: Hough/RANSAC corners, a ResNet occupancy classifier (45 MB), an InceptionV3 piece classifier (98 MB), trained on 3D renders. Adapts to a new set from 2 photos. | Run on our samples (mirrored back first) without adaptation, about 1–2 s per image on 4 CPU cores. **Corners:** over 20 runs per image (the detector is randomized), right almost always on photos 01 and 02, and less than half the time on photo 03, photo 04 and the clip's last frame. Failures snapped to the outer wooden frame or shifted by 1–2 ranks. **Pieces, with correct corners:** 2, 5 and about 8 wrong squares out of 64 on three boards; no board fully right. Errors: missed pieces, king read as queen, queen as rook or pawn, bishop as knight. | Corners need a learned keypoint model or a user-confirmed calibration (section 5.2). Models trained only on renders don't transfer to our set. The two-photo adaptation (from the paper, about 9 errors per board down to 0.11) is not yet tested on our set. |
+| **ChessReD / End-to-End Chess Recognition** ([paper](https://arxiv.org/abs/2310.04086)) | 10,800 real photos, and a model reading the whole board in one pass | Their model gets 15% of real boards fully right. chesscog gets 2.3%, with board detection succeeding on 34%. | Reading a whole real board from one image is hard. Following a game and matching legal moves (section 6) avoids needing perfect boards. |
+| **CVChess** ([paper](https://www.alphaxiv.org/abs/2511.11522)) | Per-square CNN trained on ChessReD | 98.9% square accuracy on its own test set, 65% on another setup | Data from the target setup matters most (section 7.4). |
+| **Small VLMs** (for example Qwen3-VL-8B or Gemma-3-4B fine-tuned on renders, [thesis](https://amslaurea.unibo.it/id/eprint/38154/)) | Image to text | About 8% exact-match even on rendered boards, plus large models and slow token-by-token output | Not used. |
