@@ -21,6 +21,30 @@ v0 deliverable:
 
 Everything runs in the browser and is hosted as static files (e.g. GitHub Pages).
 
+### Primary camera placement
+
+The camera sits **at one player's end of the board, raised above that player**
+(behind and above White or Black), looking down the files toward the opponent.
+In the image, one back rank is near the camera and the other is far away.
+
+This is the setup the app is built and tested for first. Existing tools such as
+ChessCam assume a camera at the **side** of the board, looking across the files,
+and fail in this setup. That is the main reason this project exists.
+
+A camera at the side of the board stays supported (orientation handles all four
+rotations), but it is secondary.
+
+What this placement implies:
+
+- Pieces lean and occlude along files. Near pieces partly cover the pieces
+  behind them on the same file. The near player's back rank covers their own
+  pawns, and the far side's pawns cover the far back rank.
+- The far ranks are foreshortened, about 1.6× smaller than the near ranks in
+  the samples.
+- Hands enter from both ends of the image: the near player's from the bottom,
+  the opponent's from the top.
+- Either colour can be near the camera.
+
 ### Non-goals for v0
 
 - **Recognizing piece *types* from pixels.** We track the game from a known
@@ -39,7 +63,7 @@ conditions:
 
 | Observation | Consequence for the design |
 |---|---|
-| Camera sits on one side of the board, about 45–55° above it, and the whole board is in frame. Near ranks look about 1.6× taller than far ranks. | Strong perspective: we need a full homography, not a rotated rectangle. |
+| Camera sits at one player's end of the board (rank 1 or rank 8 nearest), about 45–55° above it, and the whole board is in frame. Near ranks look about 1.6× taller than far ranks. | Strong perspective: we need a full homography, not a rotated rectangle. This placement is the primary target (section 1). |
 | Pieces are tall. A king's silhouette covers its own square **and about one square behind it** (away from the camera). | Per-square sampling must account for lean (section 4.5). Never classify a square by its full warped area alone. |
 | This sample's image is **mirrored**: rank 1 is near the camera, but the h-file is on the left and h1 is a *light* square. On a real board a1 is always dark. Other webcams, apps and OS settings deliver an unmirrored image. | **Both mirrored and unmirrored input are first-class.** Mirroring is treated as part of orientation and detected automatically from the rule "a1 is dark" (section 4.4), with a manual toggle as a fallback. Nothing assumes either case. |
 | The camera can sit on any side: photo 1 has rank 1 near the camera, photos 2–4 have rank 8 near. | All four rotations must be supported. |
